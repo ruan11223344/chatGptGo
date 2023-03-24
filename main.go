@@ -10,7 +10,9 @@ import (
 	"github.com/sirupsen/logrus"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -23,9 +25,43 @@ func getAPIKey() string {
 	}
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		log.Fatalln("API 密钥不能为空")
+		log.Print("API 密钥不能为空")
+		return getAPIKey()
 	}
 	return apiKey
+}
+
+func getProxy() string {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("请输入http代理(例:http://127.0.0.1:1081) 无需代理直接回车:")
+	proxyStr, err := reader.ReadString('\n')
+	if err != nil {
+		log.Fatalln("读取 代理时出错：", err)
+	}
+	proxyStr = strings.TrimSpace(proxyStr)
+	return proxyStr
+}
+
+func getMaxTokens() int {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("请输入max token(回车,默认100,最大建议不要超过600):")
+	maxTokenStr, err := reader.ReadString('\n')
+	if err != nil {
+		log.Fatalln("读取 max token时出错：", err)
+	}
+
+	maxTokenStr = strings.TrimSpace(maxTokenStr)
+	if maxTokenStr == "" {
+		return 100
+	}
+
+	maxToken, err := strconv.Atoi(maxTokenStr)
+	if err != nil {
+		log.Fatalln("max token必须是数字：%v", err)
+		return getMaxTokens()
+	}
+
+	return maxToken
 }
 
 // 从配置文件中读取模型列表
@@ -77,21 +113,35 @@ func truncateQuestion(question string, maxTokens int) string {
 	return question
 }
 
+func createHTTPClientWithProxy(proxyURL string) *http.Client {
+	proxyURLParsed, err := url.Parse(proxyURL)
+	if err != nil {
+		log.Fatalln("解析代理地址时出错,将使用直连模式,错误：%v", err)
+		return &http.Client{}
+	}
+	proxyFunc := http.ProxyURL(proxyURLParsed)
+	transport := &http.Transport{Proxy: proxyFunc}
+	return &http.Client{Transport: transport}
+}
+
 // 调用 GPT-3 生成答案
-// 调用 GPT-3 生成答案
-func getAnswer(apiKey, question, model string) (bool, string) {
+func getAnswer(apiKey, question, model string, proxy string, tokens int) (bool, string) {
 	conf := openai.DefaultConfig(apiKey)
-	conf.HTTPClient = &http.Client{}
+	if proxy != "" {
+		conf.HTTPClient = createHTTPClientWithProxy(proxy)
+	} else {
+		conf.HTTPClient = &http.Client{}
+	}
 	gptClient := openai.NewClientWithConfig(conf)
 
 	req := openai.ChatCompletionRequest{
 		Model:     model,
-		MaxTokens: 300,
+		MaxTokens: tokens,
 		Stream:    false,
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    "assistant",
-				Content: truncateQuestion(question, 300),
+				Content: truncateQuestion(question, tokens),
 			},
 		},
 	}
@@ -112,10 +162,11 @@ func main() {
 	logUtility.SetLogrus("chatGptGo")
 	apiKey := getAPIKey()
 	models := getModels()
+	proxy := getProxy()
+	maxTokens := getMaxTokens()
 	if len(models) == 0 {
 		log.Fatalln("没有可用的模型")
 	}
-
 	model, err := chooseModel(models)
 	if err != nil {
 		log.Fatalln("选择模型时出错：", err)
@@ -124,7 +175,7 @@ func main() {
 		return
 	}
 	for {
-		fmt.Print("请输入您的问题:")
+		fmt.Print("\r\n请输入您的问题:")
 		scanner := bufio.NewScanner(os.Stdin)
 		if !scanner.Scan() {
 			log.Fatalf("读取输入时出错：%v", scanner.Err())
@@ -141,10 +192,10 @@ func main() {
 			continue
 		}
 		logrus.Info(question)
-		ok, answer := getAnswer(apiKey, question, model)
+		ok, answer := getAnswer(apiKey, question, model, proxy, maxTokens)
 		if ok {
-			resStr := "ChatGpt: " + answer
-			fmt.Println(resStr)
+			resStr := "ChatGpt: " + answer + "\r\n"
+			fmt.Print(resStr)
 			logrus.Info(resStr)
 		} else {
 			fmt.Println(answer)
