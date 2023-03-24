@@ -1,0 +1,12 @@
+/build
+/dist
+/.idea/*
+/__pycache__/*
+*.pyc
+*.log
+/cookies
+/env
+*.spec
+*.log
+*.sum
+*.mod
